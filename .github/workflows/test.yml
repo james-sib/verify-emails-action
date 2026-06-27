@@ -1,0 +1,103 @@
+name: Verify Emails
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # Always-green end-to-end test. Runs the Action against a local mock of the
+  # Verifly API so it needs no secret and spends no credits, yet exercises the
+  # real entrypoint (batching, summary, outputs, fail-on logic).
+  smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start mock Verifly API
+        run: |
+          cat > mock-server.js <<'EOF'
+          const http = require('http');
+          http.createServer((req, res) => {
+            if (req.method === 'POST' && req.url.startsWith('/api/v1/verify/batch')) {
+              let body = '';
+              req.on('data', c => (body += c));
+              req.on('end', () => {
+                const { emails } = JSON.parse(body || '{}');
+                const results = (emails || []).map(email => ({
+                  email,
+                  is_valid: true,
+                  result: 'deliverable',
+                  recommendation: 'safe_to_send',
+                  reason: 'mock',
+                }));
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                  success: true,
+                  total: results.length,
+                  verified_count: results.length,
+                  valid_count: results.length,
+                  invalid_count: 0,
+                  results,
+                  credits: { used: results.length, remaining: 999 },
+                }));
+              });
+              return;
+            }
+            res.writeHead(404); res.end('{}');
+          }).listen(8099, () => console.log('mock listening on 8099'));
+          EOF
+          node mock-server.js &
+          for i in $(seq 1 20); do
+            curl -sf -X POST http://localhost:8099/api/v1/verify/batch \
+              -H 'Content-Type: application/json' -d '{"emails":["x@y.com"]}' && break
+            sleep 0.5
+          done
+
+      - name: Run the Action against the mock
+        uses: ./
+        id: verify
+        with:
+          api-key: mock-key-not-a-secret
+          emails: |
+            alice@example.com, bob@example.com
+            carol@example.com
+          fail-on: undeliverable
+          output: results.json
+          api-url: http://localhost:8099
+
+      - name: Check outputs
+        run: |
+          echo "total=${{ steps.verify.outputs.total }}"
+          echo "deliverable=${{ steps.verify.outputs.deliverable }}"
+          test "${{ steps.verify.outputs.total }}" = "3"
+          test "${{ steps.verify.outputs.deliverable }}" = "3"
+          test -f results.json
+          echo "Smoke test passed."
+
+  # Optional: verify a couple of real addresses against the live API. Skips
+  # gracefully when the VERIFLY_API_KEY secret is not configured, so the
+  # default branch stays green without a secret.
+  live-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for API key
+        id: gate
+        run: |
+          if [ -n "${{ secrets.VERIFLY_API_KEY }}" ]; then
+            echo "has_key=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_key=false" >> "$GITHUB_OUTPUT"
+            echo "No VERIFLY_API_KEY secret set - skipping live test." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Verify against live Verifly API
+        if: steps.gate.outputs.has_key == 'true'
+        uses: ./
+        with:
+          api-key: ${{ secrets.VERIFLY_API_KEY }}
+          emails: support@github.com, this-mailbox-does-not-exist@gmail.com
+          fail-on: ''

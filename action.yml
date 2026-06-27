@@ -1,0 +1,52 @@
+name: 'Verify Emails'
+description: 'Verify email addresses (lint your email/config lists) in CI with the Verifly API, and fail the job on bad addresses.'
+author: 'james-sib'
+
+branding:
+  icon: 'check-circle'
+  color: 'blue'
+
+inputs:
+  api-key:
+    description: 'Verifly API key. Store it as a repository secret and pass it as ${{ secrets.VERIFLY_API_KEY }}. Get a free key (100 credits) at https://verifly.email.'
+    required: true
+  emails:
+    description: 'Email addresses to verify, separated by commas and/or newlines. Provide this and/or `file`.'
+    required: false
+    default: ''
+  file:
+    description: 'Path to a .txt or .csv file to scan for email addresses. Provide this and/or `emails`.'
+    required: false
+    default: ''
+  fail-on:
+    description: 'Comma/space separated result categories that should fail the job if any address matches. Options: undeliverable, risky, unknown. Empty = never fail (report only).'
+    required: false
+    default: 'undeliverable'
+  output:
+    description: 'Optional path to write the full JSON results to.'
+    required: false
+    default: ''
+  api-url:
+    description: 'Base URL of the Verifly API. Override only for self-hosted instances.'
+    required: false
+    default: 'https://verifly.email'
+
+outputs:
+  total:
+    description: 'Total number of addresses verified.'
+  deliverable:
+    description: 'Count of deliverable addresses.'
+  undeliverable:
+    description: 'Count of undeliverable addresses.'
+  risky:
+    description: 'Count of risky addresses.'
+  unknown:
+    description: 'Count of addresses with an unknown verdict.'
+  failed-count:
+    description: 'Number of addresses that matched the fail-on condition.'
+  results-json:
+    description: 'Full results as a JSON string.'
+
+runs:
+  using: 'node20'
+  main: 'index.js'
